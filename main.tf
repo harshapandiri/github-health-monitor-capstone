@@ -44,6 +44,7 @@ resource "aws_lambda_function" "github_health_monitor" {
     variables = {
       SECRET_NAME = aws_secretsmanager_secret.github_api_config.name
       PROJECT     = "GitHub Project Health Monitor"
+      TABLE_NAME  = aws_dynamodb_table.health_reports.name
     }
   }
 }
@@ -80,6 +81,28 @@ resource "aws_lambda_permission" "allow_api_gateway" {
   source_arn    = "${aws_apigatewayv2_api.github_health_api.execution_arn}/*/*"
 }
 
+resource "aws_dynamodb_table" "health_reports" {
+  name         = "github-health-monitor-reports-capstone"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "repository"
+  range_key    = "checked_at"
+
+  attribute {
+    name = "repository"
+    type = "S"
+  }
+
+  attribute {
+    name = "checked_at"
+    type = "S"
+  }
+
+  tags = {
+    Project = "GitHub Project Health Monitor"
+    Purpose = "Store health report history"
+  }
+}
+
 output "lambda_function_name" {
   value = aws_lambda_function.github_health_monitor.function_name
 }
@@ -94,4 +117,8 @@ output "secret_name" {
 
 output "health_endpoint_url" {
   value = "${aws_apigatewayv2_stage.default_stage.invoke_url}/health"
+}
+
+output "dynamodb_table_name" {
+  value = aws_dynamodb_table.health_reports.name
 }

@@ -47,6 +47,13 @@ def lambda_handler(event, context):
         issues = github_get(f"/repos/{owner}/{repo}/issues?state=open&per_page=100", token)
         commits = github_get(f"/repos/{owner}/{repo}/commits?per_page=5", token)
 
+        try:
+            workflow_runs = github_get(f"/repos/{owner}/{repo}/actions/runs?per_page=1", token)
+            latest_workflow = workflow_runs.get("workflow_runs", [{}])[0]
+            workflow_status = latest_workflow.get("conclusion") or latest_workflow.get("status") or "unknown"
+        except Exception:
+            workflow_status = "not_available"
+
         real_open_issues = [
             issue for issue in issues
             if "pull_request" not in issue
@@ -63,6 +70,12 @@ def lambda_handler(event, context):
 
         health_score = 100
         health_score -= min(open_issues_count * 5, 40)
+
+        if workflow_status in ["failure", "cancelled", "timed_out"]:
+            health_score -= 25
+        elif workflow_status == "not_available":
+            health_score -= 5
+
         health_score = max(0, min(100, health_score))
 
         if health_score >= 80:
@@ -71,6 +84,8 @@ def lambda_handler(event, context):
             status = "needs_attention"
         else:
             status = "unhealthy"
+
+        checked_at = datetime.now(timezone.utc).isoformat()
 
         report = {
             "project": "GitHub Project Health Monitor",
@@ -81,10 +96,34 @@ def lambda_handler(event, context):
             "stars": stars,
             "forks": forks,
             "recent_commits": recent_commit_messages,
-            "last_checked_utc": datetime.now(timezone.utc).isoformat(),
+            "latest_workflow_status": workflow_status,
+            "last_checked_utc": checked_at,
             "external_api_called": True,
             "secret_read_at_runtime": True
         }
+
+        table_name = os.environ.get("TABLE_NAME")
+
+        if table_name:
+            dynamodb = boto3.resource("dynamodb")
+            table = dynamodb.Table(table_name)
+
+            table.put_item(
+                Item={
+                    "repository": report["repository"],
+                    "checked_at": report["last_checked_utc"],
+                    "health_score": report["health_score"],
+                    "status": report["status"],
+                    "open_issues": report["open_issues"],
+                    "stars": report["stars"],
+                    "forks": report["forks"],
+                    "external_api_called": True
+                }
+            )
+
+            report["stored_in_dynamodb"] = True
+        else:
+            report["stored_in_dynamodb"] = False
 
         return {
             "statusCode": 200,
